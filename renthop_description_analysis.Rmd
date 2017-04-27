@@ -1,0 +1,146 @@
+---
+title: "Renthop N-grams"
+author: "EY"
+date: "April 9, 2017"
+output: html_document
+---
+
+Wanted to get an idea of feature popularity in the dataset, I noticed descriptions were usually three, two, or one words. I thought of this way to deal with that.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, message=FALSE}
+
+# Load packages and data
+packages <- c("jsonlite", "dplyr", "ggplot2", "qdap", "tm", "wordcloud", "RWeka")
+purrr::walk(packages, library, character.only = TRUE, warn.conflicts = FALSE)
+
+data <- fromJSON("./input/train.json")
+```
+
+
+
+```{r, out.width = "1000px", out.height="650px"}
+
+descriptions <- unlist(data$description)
+descriptions <- sort(descriptions) 
+
+#removing empty descriptions
+descriptions<- unlist(descriptions[nchar(descriptions) > 0])
+
+#sampling because of memory constraints
+idx <- sample(1:length(descriptions), 100)
+descriptions_sample <- descriptions[idx]
+
+#creating text cleaning function
+clean_text <- function(text)
+                    text %>% 
+                    gsub("\\S+\\s*@\\s*\\S+", "", .) %>%
+                    gsub("website_redacted", "", .) %>%
+                    replace_ordinal() %>% 
+                    removeNumbers() %>%  
+                    bracketX(., bracket = "all", scrub = TRUE) %>% 
+                    tolower() %>%
+                    removeWords(., c(stopwords("english")[!stopwords("english") %in% "no"], "will", "showing", "email")) %>%
+                    strip(digit.remove = FALSE) %>%
+                    paste(sep = " ", collapse = " ")
+
+
+#create dictionary
+dict <- clean_text(descriptions_sample) %>% 
+  strsplit(split = " ") %>% 
+  flatten_chr() %>% 
+  VectorSource() %>% 
+  Corpus()
+
+#stemming
+stem_sentence <- function(sentence, dict) 
+                     clean_text(sentence) %>% 
+                     strsplit(split = " ") %>% 
+                     unlist() %>% 
+                     stemDocument(language = "english") %>% 
+                     stemCompletion(dict) %>% 
+                     paste(sep = " ", collapse = " ") %>% 
+                     stripWhitespace()
+
+
+#stemmed_test <- clean_text(descriptions_sample) %>% 
+#  strsplit(split = " ") %>% 
+#  unlist() %>% 
+#  stemDocument(language = "english")
+
+
+descriptions_sample <- purrr::map(descriptions_sample, stem_sentence, dict)
+
+```
+
+```{r}
+
+tokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 1, max = 1))
+tokenizer_bi <- function(x) NGramTokenizer(x, Weka_control(min = 2, max = 2))
+tokenizer_tri <- function(x) NGramTokenizer(x, Weka_control(min = 3, max = 3))
+
+text_corp <- VCorpus(VectorSource(descriptions_sample))
+
+tdm <- TermDocumentMatrix(text_corp,  control = list(tokenize = tokenizer))
+tdm_bi <- TermDocumentMatrix(text_corp,  control = list(tokenize = tokenizer_bi))
+#tdm_tri <- TermDocumentMatrix(text_corp,  control = list(tokenize = tokenizer_tri))
+
+#remove sparse
+tdm <- removeSparseTerms(tdm, .8)
+tdm_bi <- removeSparseTerms(tdm_bi, .95)
+
+
+#unigram vector
+tdm_matrix <- as.matrix(tdm)
+freq_features <- rowSums(tdm_matrix)
+unigrams <- freq_features %>% 
+  sort() 
+
+#bigram vector
+tdm_matrix_bi <- as.matrix(tdm_bi)
+freq_features_bi <- rowSums(tdm_matrix_bi)
+bigrams <- freq_features_bi %>% sort() 
+
+#trigram vector
+#tdm_matrix_tri <- as.matrix(tdm_tri)
+#freq_features_tri <- rowSums(tdm_matrix_tri)
+#trigrams <- freq_features_tri %>% sort() %>% tail(50)
+
+#taking out bigrams that are part of a trigram
+#bigram_index <- names(bigrams) %in% tokenizer_bi(names(trigrams))
+#bigrams <- bigrams[!bigram_index]
+
+#taking out unigrams that are part of a trigram
+#unigram_index <- names(unigrams) %in% tokenizer(names(trigrams))
+#unigrams <- unigrams[!unigram_index]
+
+#taking out unigrams that are part of a bigram
+unigram_index <- names(unigrams) %in% tokenizer(names(bigrams))
+unigrams <- unigrams[!unigram_index]
+
+#creating a combined vector
+feature_freqlist <- c(unigrams, bigrams)
+feature_freqlist <- sort(feature_freqlist, decreasing = TRUE)
+
+unigrams %>% head()
+```
+
+
+```{r, out.width = "1000px", out.height="650px"}
+
+
+wordcloud(names(feature_freqlist), feature_freqlist, max.words = 100, color = brewer.pal(11, "BrBG"), scale = c(2, 0.5))
+
+x <- barplot(feature_freqlist[1:10], xaxt = "n", col = "#ADD8E6")
+labs = names(feature_freqlist[1:10])
+text(cex=1, x= x-.01, y= -5, labs, xpd=TRUE, srt=45, pos=2)
+```
+
+
+\[
+P(\textbf{high}|\textbf{cats}) = P(\textbf{high} ) \frac{P(\textbf{cats} |\textbf{high})}{P(\textbf{cats})} 
+\]
